@@ -106,7 +106,7 @@ function StatBadge({ label, value, accent }) {
 /* ─── Main AdminPanel ───────────────────────────────────────────── */
 export default function AdminPanel() {
   const [newProduct, setNewProduct] = useState({ name: '', category: '', initialStock: '' });
-  const [updateCount, setUpdateCount] = useState({ productId: '', adjustment: '' });
+  const [updateCount, setUpdateCount] = useState({ productId: '', soldCount: '', newStock: '' });
 
   const [loading, setLoading]               = useState(false);
   const [toast, setToast]                   = useState({ message: '', type: 'success' });
@@ -172,25 +172,34 @@ export default function AdminPanel() {
   /* ── Update stock ── */
   const handleUpdateCount = async (e) => {
     e.preventDefault();
-    if (!updateCount.productId || updateCount.adjustment === '') {
-      showToast('Please select a product and enter an adjustment.', 'error');
+    const sold    = parseInt(updateCount.soldCount, 10) || 0;
+    const received = parseInt(updateCount.newStock,  10) || 0;
+    if (!updateCount.productId) {
+      showToast('Please select a product.', 'error');
       return;
     }
-    const adj = parseInt(updateCount.adjustment, 10);
-    if (isNaN(adj) || adj === 0) {
-      showToast('Adjustment must be a non-zero number.', 'error');
+    if (sold === 0 && received === 0) {
+      showToast('Enter units sold and/or new stock received.', 'error');
       return;
     }
+    if (sold < 0 || received < 0) {
+      showToast('Values must be positive numbers.', 'error');
+      return;
+    }
+    const netAdj = received - sold;
     try {
       setLoading(true);
       const product = products.find((p) => p.id === updateCount.productId);
       await updateDoc(doc(db, 'products', updateCount.productId), {
-        totalStock:  increment(adj),
+        totalStock:  increment(netAdj),
+        soldCount:   increment(sold),
         lastUpdated: new Date(),
       });
-      const verb = adj > 0 ? `+${adj} units added to` : `${adj} units removed from`;
-      showToast(`${verb} "${product?.name}"`);
-      setUpdateCount({ productId: '', adjustment: '' });
+      const parts = [];
+      if (sold     > 0) parts.push(`${sold} sold`);
+      if (received > 0) parts.push(`${received} restocked`);
+      showToast(`"${product?.name}" updated — ${parts.join(', ')}.`);
+      setUpdateCount({ productId: '', soldCount: '', newStock: '' });
       fetchProducts();
     } catch (err) {
       console.error('updateCount:', err);
@@ -341,10 +350,11 @@ export default function AdminPanel() {
         <SectionCard
           icon="🔄"
           title="Daily Count Update"
-          subtitle="Adjust inventory for an existing product"
+          subtitle="Record sales and new stock received"
         >
           <form onSubmit={handleUpdateCount} className="space-y-5">
 
+            {/* Product selector */}
             <div>
               <FieldLabel htmlFor="product-select">Select Product</FieldLabel>
               <select
@@ -366,27 +376,79 @@ export default function AdminPanel() {
               </select>
             </div>
 
-            <div>
-              <FieldLabel htmlFor="adjustment">Count Change (+ to add, − to remove)</FieldLabel>
-              <input
-                id="adjustment"
-                type="number"
-                value={updateCount.adjustment}
-                onChange={(e) => setUpdateCount({ ...updateCount, adjustment: e.target.value })}
-                placeholder="e.g., 10 or -5"
-                className={inputBase}
-                required
-              />
-              <p className="mt-1.5 text-xs text-zinc-400 dark:text-zinc-500">
-                Positive numbers add stock; negative numbers subtract.
-              </p>
+            {/* Current stock badge — shown when product selected */}
+            {updateCount.productId && (() => {
+              const sel = products.find((p) => p.id === updateCount.productId);
+              const sold     = parseInt(updateCount.soldCount, 10) || 0;
+              const received = parseInt(updateCount.newStock,  10) || 0;
+              const preview  = (sel?.totalStock ?? 0) - sold + received;
+              return (
+                <div className="flex items-center justify-between rounded-xl border border-amber-200/70 bg-amber-50/60 px-4 py-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Current Stock</p>
+                    <p className="text-2xl font-extrabold tracking-tight text-zinc-900">{sel?.totalStock ?? 0}</p>
+                  </div>
+                  <svg viewBox="0 0 20 20" className="h-5 w-5 text-amber-400" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                    <path d="M7.293 14.707a1 1 0 0 1 0-1.414L10.586 10 7.293 6.707a1 1 0 1 1 1.414-1.414l4 4a1 1 0 0 1 0 1.414l-4 4a1 1 0 0 1-1.414 0z" fill="currentColor" stroke="none"/>
+                  </svg>
+                  <div className="text-right">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">After Update</p>
+                    <p className={`text-2xl font-extrabold tracking-tight ${
+                      preview < (sel?.totalStock ?? 0) ? 'text-red-500' :
+                      preview > (sel?.totalStock ?? 0) ? 'text-emerald-600' : 'text-zinc-900'
+                    }`}>{preview}</p>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Two fields side by side */}
+            <div className="grid grid-cols-2 gap-4">
+
+              {/* Units Sold */}
+              <div>
+                <FieldLabel htmlFor="sold-count">
+                  <span className="inline-flex items-center gap-1">
+                    <span className="text-red-400">▼</span> Units Sold
+                  </span>
+                </FieldLabel>
+                <input
+                  id="sold-count"
+                  type="number"
+                  min="0"
+                  value={updateCount.soldCount}
+                  onChange={(e) => setUpdateCount({ ...updateCount, soldCount: e.target.value })}
+                  placeholder="0"
+                  className={inputBase}
+                />
+                <p className="mt-1 text-[11px] text-zinc-400">Subtracts from stock</p>
+              </div>
+
+              {/* New Stock Received */}
+              <div>
+                <FieldLabel htmlFor="new-stock">
+                  <span className="inline-flex items-center gap-1">
+                    <span className="text-emerald-500">▲</span> New Stock Received
+                  </span>
+                </FieldLabel>
+                <input
+                  id="new-stock"
+                  type="number"
+                  min="0"
+                  value={updateCount.newStock}
+                  onChange={(e) => setUpdateCount({ ...updateCount, newStock: e.target.value })}
+                  placeholder="0"
+                  className={inputBase}
+                />
+                <p className="mt-1 text-[11px] text-zinc-400">Adds to stock</p>
+              </div>
             </div>
 
             <button
               type="submit"
               id="update-stock-btn"
               disabled={loading || loadingProducts}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-amber-400 dark:text-zinc-900 dark:hover:bg-amber-300"
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {loading ? (
                 <>

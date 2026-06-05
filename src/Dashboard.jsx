@@ -76,39 +76,28 @@ function HexCard({ product }) {
   return (
     <div className="hex-card">
       <div className="hex-card-inner">
-        {/* Product label */}
-        <p className="text-[9px] font-semibold uppercase tracking-[0.35em] text-amber-500">
-          Product
-        </p>
+        {/* Category */}
+        <span className="text-[10px] font-semibold uppercase tracking-[0.25em] text-amber-400">
+          {product.category}
+        </span>
 
         {/* Product name */}
-        <h3 className="mt-1.5 text-base font-bold leading-tight text-zinc-900 dark:text-white">
+        <h3 className="mt-2 text-[17px] font-bold leading-tight text-white line-clamp-2 px-2">
           {product.name}
         </h3>
 
-        {/* Divider */}
-        <div className="mx-auto my-2 h-px w-10 rounded-full bg-amber-300/60" />
-
-        {/* Category */}
-        <p className="text-[9px] font-semibold uppercase tracking-[0.3em] text-zinc-400 dark:text-zinc-500">
-          Category
-        </p>
-        <p className="mt-0.5 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-          {product.category}
-        </p>
-
-        {/* Divider */}
-        <div className="mx-auto my-2 h-px w-10 rounded-full bg-amber-300/60" />
+        {/* Subtle divider */}
+        <div className="mx-auto my-3 h-px w-8 rounded-full bg-amber-500/30" />
 
         {/* Stock count */}
-        <p className="text-[9px] font-semibold uppercase tracking-[0.3em] text-zinc-400 dark:text-zinc-500">
-          Total Stock
-        </p>
-        <p className="mt-0.5 text-4xl font-extrabold tracking-tight text-zinc-900 dark:text-amber-300">
-          {product.totalStock ?? 0}
-        </p>
-
-
+        <div className="flex flex-col items-center">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-zinc-400">
+            Stock
+          </span>
+          <span className="mt-0.5 text-3xl font-extrabold tracking-tight text-amber-300">
+            {product.totalStock ?? 0}
+          </span>
+        </div>
       </div>
     </div>
   );

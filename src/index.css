@@ -1,111 +1,255 @@
-:root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap');
+@import 'tailwindcss';
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
-
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
-}
-
-body {
-  margin: 0;
-}
-
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
+/* ─── Reset & Base ──────────────────────────────────────────── */
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
-
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
+html,
+body {
   margin: 0;
+  padding: 0;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-code,
-.counter {
-  font-family: var(--mono);
+#root {
+  min-height: 100svh;
+}
+
+/* ─── Honeycomb Tiled Background ────────────────────────────── */
+.honeycomb-bg {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='90' height='78' viewBox='0 0 90 78'%3E%3Cg fill='none' stroke='%23fbbf24' stroke-opacity='0.18' stroke-width='1.5'%3E%3Cpath d='M22.5 2 3 13v22l19.5 11 19.5-11V13L22.5 2z'/%3E%3Cpath d='M67.5 2 48 13v22l19.5 11 19.5-11V13L67.5 2z'/%3E%3Cpath d='M45 38 25.5 49v22l19.5 11 19.5-11V49L45 38z'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: 90px 78px;
+  opacity: 0.45;
+}
+
+/* Darker honeycomb for dark mode */
+.dark .honeycomb-bg {
+  opacity: 0.12;
+}
+
+/* ─── Hive Cluster (right-side decorative honeycomb) ────────── */
+.hive-cluster {
+  position: absolute;
+  top: 12%;
+  right: 5%;
+  width: 420px;
+  height: 360px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='420' height='360' viewBox='0 0 420 360'%3E%3Cdefs%3E%3CradialGradient id='g' cx='50%25' cy='50%25' r='50%25'%3E%3Cstop offset='0%25' stop-color='%23fbbf24' stop-opacity='0.35'/%3E%3Cstop offset='100%25' stop-color='%23fbbf24' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Crect width='420' height='360' fill='url(%23g)'/%3E%3Cg fill='none' stroke='%23f59e0b' stroke-opacity='0.35' stroke-width='2'%3E%3Cpath d='M55 10 25 28v34l30 17 30-17V28L55 10z'/%3E%3Cpath d='M115 10 85 28v34l30 17 30-17V28L115 10z'/%3E%3Cpath d='M175 10 145 28v34l30 17 30-17V28L175 10z'/%3E%3Cpath d='M235 10 205 28v34l30 17 30-17V28L235 10z'/%3E%3Cpath d='M85 70 55 88v34l30 17 30-17V88L85 70z'/%3E%3Cpath d='M145 70 115 88v34l30 17 30-17V88L145 70z'/%3E%3Cpath d='M205 70 175 88v34l30 17 30-17V88L205 70z'/%3E%3Cpath d='M265 70 235 88v34l30 17 30-17V88L265 70z'/%3E%3Cpath d='M55 130 25 148v34l30 17 30-17v-34L55 130z'/%3E%3Cpath d='M115 130 85 148v34l30 17 30-17v-34L115 130z'/%3E%3Cpath d='M175 130 145 148v34l30 17 30-17v-34L175 130z'/%3E%3Cpath d='M235 130 205 148v34l30 17 30-17v-34L235 130z'/%3E%3Cpath d='M85 190 55 208v34l30 17 30-17v-34L85 190z'/%3E%3Cpath d='M145 190 115 208v34l30 17 30-17v-34L145 190z'/%3E%3Cpath d='M205 190 175 208v34l30 17 30-17v-34L205 190z'/%3E%3Cpath d='M265 190 235 208v34l30 17 30-17v-34L265 190z'/%3E%3Cpath d='M55 250 25 268v34l30 17 30-17v-34L55 250z'/%3E%3Cpath d='M115 250 85 268v34l30 17 30-17v-34L115 250z'/%3E%3Cpath d='M175 250 145 268v34l30 17 30-17v-34L175 250z'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: cover;
+  pointer-events: none;
+}
+
+/* ─── Hexagonal Product Card ────────────────────────────────── */
+.hex-card {
+  position: relative;
+  width: 220px;
+  height: 252px;
+  /* Amber gradient border via padding trick + clip-path */
+  padding: 3px;
+  background: linear-gradient(145deg, #fbbf24 0%, #f59e0b 50%, #d97706 100%);
+  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+  transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1),
+    filter 0.35s ease;
+  cursor: default;
+  filter: drop-shadow(0 12px 28px rgba(245, 158, 11, 0.22));
+}
+
+.hex-card:hover {
+  transform: translateY(-8px) scale(1.03);
+  filter: drop-shadow(0 22px 40px rgba(245, 158, 11, 0.38));
+}
+
+.hex-card-inner {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 28px 18px;
+  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+  background: linear-gradient(170deg, #18181b 0%, #121214 60%, #09090b 100%);
+  gap: 2px;
+  position: relative;
+  overflow: hidden;
+}
+
+.hex-card-inner::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at 50% 20%,
+    rgba(245, 158, 11, 0.12) 0%,
+    transparent 70%
+  );
+  pointer-events: none;
+}
+
+/* ─── Background Particle Animations ───────────────────────── */
+
+/* Tiny bee wander paths — each uses a unique translate curve */
+@keyframes wander-a {
+  0%   { transform: translate(0px, 0px) rotate(0deg); }
+  20%  { transform: translate(22px, -18px) rotate(8deg); }
+  45%  { transform: translate(40px, -6px) rotate(-4deg); }
+  70%  { transform: translate(18px, 14px) rotate(10deg); }
+  100% { transform: translate(0px, 0px) rotate(0deg); }
+}
+@keyframes wander-b {
+  0%   { transform: translate(0px, 0px) rotate(0deg); }
+  25%  { transform: translate(-30px, -22px) rotate(-6deg); }
+  55%  { transform: translate(-10px, -36px) rotate(5deg); }
+  80%  { transform: translate(14px, -16px) rotate(-8deg); }
+  100% { transform: translate(0px, 0px) rotate(0deg); }
+}
+@keyframes wander-c {
+  0%   { transform: translate(0px, 0px) rotate(0deg); }
+  30%  { transform: translate(16px, 24px) rotate(12deg); }
+  60%  { transform: translate(-20px, 18px) rotate(-5deg); }
+  100% { transform: translate(0px, 0px) rotate(0deg); }
+}
+@keyframes wander-d {
+  0%   { transform: translate(0px, 0px) rotate(0deg); }
+  35%  { transform: translate(-24px, -14px) rotate(-10deg); }
+  65%  { transform: translate(10px, -28px) rotate(6deg); }
+  100% { transform: translate(0px, 0px) rotate(0deg); }
+}
+@keyframes wander-e {
+  0%   { transform: translate(0px, 0px) rotate(0deg); }
+  40%  { transform: translate(28px, 12px) rotate(8deg); }
+  75%  { transform: translate(6px, 26px) rotate(-6deg); }
+  100% { transform: translate(0px, 0px) rotate(0deg); }
+}
+
+/* Floating hollow hexagons */
+@keyframes hex-rise {
+  0%   { transform: translateY(0px) rotate(0deg); opacity: 0.12; }
+  50%  { transform: translateY(-28px) rotate(30deg); opacity: 0.22; }
+  100% { transform: translateY(0px) rotate(0deg); opacity: 0.12; }
+}
+@keyframes hex-drift {
+  0%   { transform: translate(0px, 0px) rotate(0deg); opacity: 0.1; }
+  33%  { transform: translate(18px, -20px) rotate(20deg); opacity: 0.2; }
+  66%  { transform: translate(-12px, -10px) rotate(-15deg); opacity: 0.15; }
+  100% { transform: translate(0px, 0px) rotate(0deg); opacity: 0.1; }
+}
+
+/* ─── Theme Toggle (pill with sun + moon) ────────────────────── */
+.theme-toggle {
   display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(251, 191, 36, 0.5);
+  background: rgba(255, 255, 255, 0.9);
+  transition: background 0.3s ease, border-color 0.3s ease;
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+.dark .theme-toggle {
+  background: rgba(24, 24, 27, 0.9);
+  border-color: rgba(251, 191, 36, 0.3);
+}
+
+.theme-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: #a1a1aa;
+  cursor: pointer;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+.theme-toggle-btn.active {
+  background: #18181b;
+  color: white;
+}
+
+.dark .theme-toggle-btn.active {
+  background: #fbbf24;
+  color: #18181b;
+}
+
+/* ─── Keyframe Animations ────────────────────────────────────── */
+@keyframes bee-float {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  25% {
+    transform: translate3d(18px, -14px, 0) rotate(5deg);
+  }
+  50% {
+    transform: translate3d(8px, -24px, 0) rotate(-3deg);
+  }
+  75% {
+    transform: translate3d(-10px, -10px, 0) rotate(4deg);
+  }
+}
+
+@keyframes bee-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(-2deg);
+  }
+  33% {
+    transform: translate3d(30px, -20px, 0) rotate(3deg);
+  }
+  66% {
+    transform: translate3d(-20px, -30px, 0) rotate(-4deg);
+  }
+}
+
+@keyframes flight-pulse {
+  0%,
+  100% {
+    opacity: 0.32;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+@keyframes float-slow {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(24px, -28px, 0);
+  }
+}
+
+@keyframes float-fast {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(-28px, 22px, 0);
+  }
+}
+
+@keyframes hex-grid-drift {
+  0%,
+  100% {
+    opacity: 0.38;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(1.015);
+  }
 }
