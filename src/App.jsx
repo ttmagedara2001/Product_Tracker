@@ -117,34 +117,34 @@ function App() {
             col 2 (center) → page title, perfectly centred
             col 3 (right)  → admin + theme toggle
         */}
-        <div className="mx-auto grid max-w-6xl grid-cols-[auto_1fr_auto] items-center gap-4 px-6 py-3">
+        <div className="mx-auto flex items-center justify-between gap-3 px-4 py-2.5 sm:px-6 sm:py-3 max-w-6xl">
 
           {/* ── Col 1: Logo only ── */}
           <img
             src="/assets/logo.png"
             alt="Stitch Hive logo"
-            className="h-11 w-11 rounded-full border-2 border-amber-300/70 bg-white object-contain p-0.5 shadow-sm dark:border-amber-500/40"
+            className="h-9 w-9 sm:h-11 sm:w-11 rounded-full border-2 border-amber-300/70 bg-white object-contain p-0.5 shadow-sm dark:border-amber-500/40"
           />
 
           {/* ── Col 2: Centered title ── */}
-          <div className="flex flex-col items-center justify-center leading-none">
-            <p className="text-[9px] font-semibold uppercase tracking-[0.42em] text-amber-500">
+          <div className="flex flex-col items-center justify-center text-center leading-none">
+            <p className="text-[8px] sm:text-[9px] font-semibold uppercase tracking-[0.3em] sm:tracking-[0.42em] text-amber-500">
               Stitch Hive
             </p>
-            <h1 className="mt-0.5 text-xl font-bold tracking-tight text-zinc-900 dark:text-white">
+            <h1 className="mt-0.5 text-sm xs:text-base sm:text-lg md:text-xl font-bold tracking-tight text-zinc-900 dark:text-white">
               Real-time Inventory
             </h1>
           </div>
 
           {/* ── Col 3: Nav controls ── */}
-          <nav className="flex items-center gap-3">
+          <nav className="flex items-center gap-2.5 sm:gap-3">
 
             {/* Admin text link */}
             <button
               type="button"
               id="nav-admin-btn"
               onClick={() => navigate(isAdmin ? '/admin' : '/admin-login')}
-              className="text-sm font-semibold text-zinc-800 transition-colors hover:text-amber-500 dark:text-zinc-200 dark:hover:text-amber-400"
+              className="text-xs sm:text-sm font-semibold text-zinc-800 transition-colors hover:text-amber-500 dark:text-zinc-200 dark:hover:text-amber-400"
             >
               Admin
             </button>
@@ -155,13 +155,11 @@ function App() {
                 type="button"
                 id="nav-signout-btn"
                 onClick={handleSignOut}
-                className="rounded-full bg-zinc-900 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-700 dark:bg-amber-400 dark:text-zinc-900 dark:hover:bg-amber-300"
+                className="rounded-full bg-zinc-900 px-3.5 py-1.5 sm:px-5 sm:py-2 text-xs sm:text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-700 dark:bg-amber-400 dark:text-zinc-900 dark:hover:bg-amber-300"
               >
                 Sign out
               </button>
             )}
-
-
 
           </nav>
         </div>
