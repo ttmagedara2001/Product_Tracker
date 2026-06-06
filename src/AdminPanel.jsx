@@ -14,6 +14,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebaseConfig';
 import { jsPDF } from 'jspdf';
+import * as XLSX from 'xlsx';
 
 const DEFAULT_PALETTE = [
   { name: 'Honey', hex: '#F59E0B' },
@@ -164,6 +165,12 @@ export default function AdminPanel() {
   const [activeOrder, setActiveOrder] = useState(null);
   const [statusFilter, setStatusFilter] = useState('all');
 
+  // Bulk Product Import state
+  const [productAddMode, setProductAddMode] = useState('single'); // 'single' | 'bulk'
+  const [bulkFile, setBulkFile] = useState(null);
+  const [parsedProducts, setParsedProducts] = useState([]);
+  const [duplicateStrategy, setDuplicateStrategy] = useState('skip'); // 'skip' | 'merge' | 'overwrite'
+
   useEffect(() => {
     fetchProducts();
 
@@ -242,6 +249,238 @@ export default function AdminPanel() {
       showToast('Failed to load products.', 'error');
     } finally {
       setLoadingProducts(false);
+    }
+  };
+
+
+  /* ── Bulk Product Template & Import ── */
+  const downloadExcelTemplate = () => {
+    try {
+      const headers = ['Product Name', 'Category', 'Stock Count', 'Unit Price (LKR)', 'Colors'];
+      const sampleRows = [
+        ['Honey Glazed Fabric', 'Textiles', 150, 850.00, 'Honey, Crimson, Gold'],
+        ['Classic Serviettes', 'Tableware', 80, 240.00, 'White: #F4F4F5, Black: #18181B'],
+        ['Premium Sewing Thread', 'Accessories', 300, 120.50, 'Blue, Teal']
+      ];
+      const data = [headers, ...sampleRows];
+
+      const ws = XLSX.utils.aoa_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Products Template');
+
+      XLSX.writeFile(wb, 'stitch_hive_bulk_products_template.xlsx');
+      showToast('Excel template downloaded successfully!');
+    } catch (err) {
+      console.error('Download template error:', err);
+      showToast('Failed to download template.', 'error');
+    }
+  };
+
+  const clearBulkUpload = () => {
+    setBulkFile(null);
+    setParsedProducts([]);
+    setDuplicateStrategy('skip');
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setBulkFile(file);
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = evt.target.result;
+        const workbook = XLSX.read(data, { type: 'binary' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+        if (rawRows.length === 0) {
+          showToast('The file is empty.', 'error');
+          setParsedProducts([]);
+          return;
+        }
+
+        const headers = rawRows[0].map(h => String(h || '').trim().toLowerCase());
+        const getColIndex = (aliases) => {
+          return headers.findIndex(h => aliases.some(alias => h.includes(alias)));
+        };
+
+        const nameIdx = getColIndex(['name', 'product']);
+        const categoryIdx = getColIndex(['category']);
+        const stockIdx = getColIndex(['stock', 'count', 'qty', 'quantity', 'initial']);
+        const priceIdx = getColIndex(['price', 'lkr', 'cost', 'unit price']);
+        const colorsIdx = getColIndex(['color']);
+
+        if (nameIdx === -1 || categoryIdx === -1 || stockIdx === -1 || priceIdx === -1) {
+          showToast('Invalid template format. Missing required columns (Name, Category, Stock, Price).', 'error');
+          setParsedProducts([]);
+          return;
+        }
+
+        const items = [];
+        for (let i = 1; i < rawRows.length; i++) {
+          const row = rawRows[i];
+          if (!row || row.length === 0 || row.every(val => val === null || val === undefined || String(val).trim() === '')) {
+            continue;
+          }
+
+          const rawName = String(row[nameIdx] || '').trim();
+          const rawCategory = String(row[categoryIdx] || '').trim();
+          const rawStock = row[stockIdx];
+          const rawPrice = row[priceIdx];
+          const rawColorsStr = colorsIdx !== -1 ? String(row[colorsIdx] || '').trim() : '';
+
+          const errors = [];
+          const warnings = [];
+
+          if (!rawName) {
+            errors.push('Product Name is required.');
+          }
+          if (!rawCategory) {
+            errors.push('Category is required.');
+          }
+
+          const totalStock = parseInt(rawStock, 10);
+          if (isNaN(totalStock) || totalStock < 0) {
+            errors.push('Stock Count must be a valid positive integer.');
+          }
+
+          const price = parseFloat(rawPrice);
+          if (isNaN(price) || price < 0) {
+            errors.push('Unit Price must be a valid positive number.');
+          }
+
+          const colors = [];
+          if (rawColorsStr) {
+            const colorTokens = rawColorsStr.split(',').map(c => c.trim()).filter(Boolean);
+            colorTokens.forEach(token => {
+              if (token.includes(':')) {
+                const [cName, cHex] = token.split(':').map(part => part.trim());
+                if (cName && cHex.startsWith('#') && cHex.length >= 4 && cHex.length <= 7) {
+                  colors.push({ name: cName, hex: cHex });
+                } else {
+                  warnings.push(`Invalid custom color format for "${token}". Expected "Name: #hex".`);
+                }
+              } else {
+                const matched = DEFAULT_PALETTE.find(p => p.name.toLowerCase() === token.toLowerCase());
+                if (matched) {
+                  colors.push({ name: matched.name, hex: matched.hex });
+                } else {
+                  const hash = token.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+                  const colorsList = ['#F59E0B', '#EF4444', '#3B82F6', '#10B981', '#8B5CF6', '#EC4899', '#14B8A6'];
+                  const generatedHex = colorsList[hash % colorsList.length];
+                  colors.push({ name: token, hex: generatedHex });
+                  warnings.push(`Color "${token}" not found in default palette; assigned standard hex ${generatedHex}.`);
+                }
+              }
+            });
+          }
+
+          const isDuplicate = products.some(p => p.name.toLowerCase() === rawName.toLowerCase());
+
+          items.push({
+            name: rawName,
+            category: rawCategory,
+            totalStock: isNaN(totalStock) ? 0 : totalStock,
+            price: isNaN(price) ? 0 : price,
+            colors,
+            isDuplicate,
+            errors,
+            warnings,
+            isValid: errors.length === 0,
+            rawColorsStr
+          });
+        }
+
+        setParsedProducts(items);
+        if (items.length === 0) {
+          showToast('No products found in the sheet.', 'error');
+        } else {
+          const valCount = items.filter(it => it.isValid).length;
+          showToast(`Successfully parsed ${items.length} rows (${valCount} valid).`);
+        }
+      } catch (err) {
+        console.error('File parsing error:', err);
+        showToast('Failed to parse file. Make sure it is a valid Excel or CSV.', 'error');
+        setParsedProducts([]);
+      }
+    };
+
+    reader.onerror = () => {
+      showToast('Failed to read file.', 'error');
+    };
+
+    reader.readAsBinaryString(file);
+  };
+
+  const handleConfirmBulkUpload = async () => {
+    const importable = parsedProducts.filter(p => p.isValid);
+    if (importable.length === 0) {
+      showToast('No valid products to upload.', 'error');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      let addedCount = 0;
+      let updatedCount = 0;
+      let skippedCount = 0;
+
+      await Promise.all(importable.map(async (ip) => {
+        const existing = products.find(p => p.name.toLowerCase() === ip.name.toLowerCase());
+
+        if (existing) {
+          if (duplicateStrategy === 'skip') {
+            skippedCount++;
+            return;
+          } else if (duplicateStrategy === 'merge') {
+            const newStock = (existing.totalStock || 0) + ip.totalStock;
+            await updateDoc(doc(db, 'products', existing.id), {
+              totalStock: newStock,
+              price: ip.price,
+              category: ip.category,
+              colors: ip.colors.length > 0 ? ip.colors : existing.colors,
+              lastUpdated: new Date()
+            });
+            updatedCount++;
+          } else if (duplicateStrategy === 'overwrite') {
+            await updateDoc(doc(db, 'products', existing.id), {
+              totalStock: ip.totalStock,
+              price: ip.price,
+              category: ip.category,
+              colors: ip.colors,
+              lastUpdated: new Date()
+            });
+            updatedCount++;
+          }
+        } else {
+          await addDoc(collection(db, 'products'), {
+            name: ip.name,
+            category: ip.category,
+            totalStock: ip.totalStock,
+            price: ip.price,
+            colors: ip.colors,
+            createdAt: new Date()
+          });
+          addedCount++;
+        }
+      }));
+
+      let message = `Bulk upload finished.`;
+      if (addedCount > 0) message += ` Added ${addedCount} new.`;
+      if (updatedCount > 0) message += ` Updated ${updatedCount} existing.`;
+      if (skippedCount > 0) message += ` Skipped ${skippedCount} duplicates.`;
+
+      showToast(message);
+      clearBulkUpload();
+      fetchProducts();
+    } catch (err) {
+      console.error('Bulk upload error:', err);
+      showToast('Failed to complete bulk upload.', 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -750,172 +989,361 @@ export default function AdminPanel() {
               title="Create New Product"
               subtitle="Add a new item to the Stitch Hive inventory"
             >
-              <form onSubmit={handleCreateProduct} className="space-y-5">
-                <div>
-                  <FieldLabel htmlFor="product-name">Product Name</FieldLabel>
-                  <input
-                    id="product-name"
-                    type="text"
-                    value={newProduct.name}
-                    onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
-                    placeholder="e.g., Serviettes"
-                    className={inputBase}
-                    required
-                  />
-                </div>
+              {/* Add Mode Toggle Tabs */}
+              <div className="flex gap-2 p-1 bg-zinc-100 dark:bg-zinc-800/80 rounded-2xl mb-5">
+                <button
+                  type="button"
+                  onClick={() => setProductAddMode('single')}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                    productAddMode === 'single'
+                      ? 'bg-white text-zinc-950 shadow-sm dark:bg-zinc-700 dark:text-white'
+                      : 'text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200'
+                  }`}
+                >
+                  <span>✍️</span> Single Product
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProductAddMode('bulk')}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                    productAddMode === 'bulk'
+                      ? 'bg-white text-zinc-950 shadow-sm dark:bg-zinc-700 dark:text-white'
+                      : 'text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200'
+                  }`}
+                >
+                  <span>📁</span> Bulk Upload
+                </button>
+              </div>
 
-                <div>
-                  <FieldLabel htmlFor="product-category">Category</FieldLabel>
-                  <input
-                    id="product-category"
-                    type="text"
-                    value={newProduct.category}
-                    onChange={(e) => setNewProduct({ ...newProduct, category: e.target.value })}
-                    placeholder="e.g., Textiles"
-                    className={inputBase}
-                    required
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
+              {productAddMode === 'single' ? (
+                <form onSubmit={handleCreateProduct} className="space-y-5 animate-fade-in">
                   <div>
-                    <FieldLabel htmlFor="initial-stock">Initial Stock</FieldLabel>
+                    <FieldLabel htmlFor="product-name">Product Name</FieldLabel>
                     <input
-                      id="initial-stock"
-                      type="number"
-                      value={newProduct.initialStock}
-                      onChange={(e) => setNewProduct({ ...newProduct, initialStock: e.target.value })}
-                      placeholder="0"
-                      min="0"
-                      className={inputBase}
-                      required
-                    />
-                  </div>
-                  <div>
-                    <FieldLabel htmlFor="product-price">Unit Price (LKR)</FieldLabel>
-                    <input
-                      id="product-price"
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={newProduct.price}
-                      onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })}
-                      placeholder="0.00"
-                      className={inputBase}
-                      required
-                    />
-                  </div>
-                </div>
-
-                {/* Colors Manager inside Create Product */}
-                <div>
-                  <FieldLabel>Product Colors (Optional)</FieldLabel>
-                  <div className="flex gap-2 mt-1.5">
-                    <input
+                      id="product-name"
                       type="text"
-                      placeholder="Color name (e.g. Honey)"
-                      value={colorName}
-                      onChange={(e) => setColorName(e.target.value)}
-                      className="flex-1 rounded-xl border border-amber-200/80 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-white"
+                      value={newProduct.name}
+                      onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
+                      placeholder="e.g., Serviettes"
+                      className={inputBase}
+                      required
                     />
+                  </div>
+
+                  <div>
+                    <FieldLabel htmlFor="product-category">Category</FieldLabel>
                     <input
-                      type="color"
-                      value={colorHex}
-                      onChange={(e) => setColorHex(e.target.value)}
-                      className="w-10 h-10 border-0 p-0 rounded-xl cursor-pointer bg-transparent"
+                      id="product-category"
+                      type="text"
+                      value={newProduct.category}
+                      onChange={(e) => setNewProduct({ ...newProduct, category: e.target.value })}
+                      placeholder="e.g., Textiles"
+                      className={inputBase}
+                      required
                     />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <FieldLabel htmlFor="initial-stock">Initial Stock</FieldLabel>
+                      <input
+                        id="initial-stock"
+                        type="number"
+                        value={newProduct.initialStock}
+                        onChange={(e) => setNewProduct({ ...newProduct, initialStock: e.target.value })}
+                        placeholder="0"
+                        min="0"
+                        className={inputBase}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <FieldLabel htmlFor="product-price">Unit Price (LKR)</FieldLabel>
+                      <input
+                        id="product-price"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={newProduct.price}
+                        onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })}
+                        placeholder="0.00"
+                        className={inputBase}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  {/* Colors Manager inside Create Product */}
+                  <div>
+                    <FieldLabel>Product Colors (Optional)</FieldLabel>
+                    <div className="flex gap-2 mt-1.5">
+                      <input
+                        type="text"
+                        placeholder="Color name (e.g. Honey)"
+                        value={colorName}
+                        onChange={(e) => setColorName(e.target.value)}
+                        className="flex-1 rounded-xl border border-amber-200/80 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-white"
+                      />
+                      <input
+                        type="color"
+                        value={colorHex}
+                        onChange={(e) => setColorHex(e.target.value)}
+                        className="w-10 h-10 border-0 p-0 rounded-xl cursor-pointer bg-transparent"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!colorName.trim()) return;
+                          setNewProduct({
+                            ...newProduct,
+                            colors: [...(newProduct.colors || []), { name: colorName.trim(), hex: colorHex }]
+                          });
+                          setColorName('');
+                          setColorHex('#fbbf24');
+                        }}
+                        className="px-3 rounded-xl bg-zinc-900 text-white text-xs font-semibold hover:bg-zinc-700 dark:bg-amber-400 dark:text-zinc-900 dark:hover:bg-amber-300 transition animate-fade-in cursor-pointer"
+                      >
+                        Add
+                      </button>
+                    </div>
+
+                    <div className="mt-2.5">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 mb-1.5">
+                        Or select from default palette:
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {DEFAULT_PALETTE.map((c, idx) => {
+                          const isSelected = (newProduct.colors || []).some(pc => pc.hex.toLowerCase() === c.hex.toLowerCase());
+                          return (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => {
+                                if (isSelected) {
+                                  setNewProduct({
+                                    ...newProduct,
+                                    colors: newProduct.colors.filter(pc => pc.hex.toLowerCase() !== c.hex.toLowerCase())
+                                  });
+                                } else {
+                                  setNewProduct({
+                                    ...newProduct,
+                                    colors: [...(newProduct.colors || []), { name: c.name, hex: c.hex }]
+                                  });
+                                }
+                              }}
+                              className={`group relative h-7 px-2.5 rounded-full border text-xs font-semibold flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
+                                isSelected
+                                  ? 'border-amber-500 bg-amber-50 text-amber-950 dark:bg-amber-950/30 dark:text-amber-300'
+                                  : 'border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
+                              }`}
+                              title={c.name}
+                            >
+                              <span
+                                className="h-3 w-3 rounded-full border border-white/25 shadow-sm"
+                                style={{ backgroundColor: c.hex }}
+                              />
+                              <span>{c.name}</span>
+                              {isSelected && <span className="text-[10px]">✓</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {(newProduct.colors || []).length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-3 p-2 border border-dashed border-amber-200/70 dark:border-zinc-700 rounded-xl">
+                        {newProduct.colors.map((c, i) => (
+                          <span key={i} className="color-badge" style={{ borderLeft: `4px solid ${c.hex}` }}>
+                            {c.name}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setNewProduct({
+                                  ...newProduct,
+                                  colors: newProduct.colors.filter((_, idx) => idx !== i)
+                                });
+                              }}
+                              className="color-badge-remove"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    type="submit"
+                    id="create-product-btn"
+                    disabled={loading}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-amber-400 dark:text-zinc-900 dark:hover:bg-amber-300 cursor-pointer"
+                  >
+                    {loading ? 'Creating…' : 'Create Product'}
+                  </button>
+                </form>
+              ) : (
+                /* Bulk Upload Form */
+                <div className="space-y-5 animate-fade-in">
+                  {/* Download Template Section */}
+                  <div className="flex items-center justify-between p-4 rounded-2xl border border-amber-200/50 bg-amber-50/20 dark:border-zinc-800 dark:bg-zinc-900/30">
+                    <div className="space-y-1">
+                      <h4 className="text-xs font-bold text-zinc-800 dark:text-zinc-200 uppercase tracking-wide">Excel Template</h4>
+                      <p className="text-xs text-zinc-500 dark:text-zinc-400">Download the standard sheet layout to prepare your items</p>
+                    </div>
                     <button
                       type="button"
-                      onClick={() => {
-                        if (!colorName.trim()) return;
-                        setNewProduct({
-                          ...newProduct,
-                          colors: [...(newProduct.colors || []), { name: colorName.trim(), hex: colorHex }]
-                        });
-                        setColorName('');
-                        setColorHex('#fbbf24');
-                      }}
-                      className="px-3 rounded-xl bg-zinc-900 text-white text-xs font-semibold hover:bg-zinc-700 dark:bg-amber-400 dark:text-zinc-900 dark:hover:bg-amber-300 transition animate-fade-in"
+                      onClick={downloadExcelTemplate}
+                      className="flex items-center gap-2 rounded-xl bg-amber-100 hover:bg-amber-200/80 px-4 py-2 text-xs font-bold text-amber-950 transition dark:bg-amber-400/10 dark:text-amber-400 dark:hover:bg-amber-400/20 cursor-pointer"
                     >
-                      Add
+                      <span>📥</span> Download
                     </button>
                   </div>
 
-                  <div className="mt-2.5">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 mb-1.5">
-                      Or select from default palette:
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {DEFAULT_PALETTE.map((c, idx) => {
-                        const isSelected = (newProduct.colors || []).some(pc => pc.hex.toLowerCase() === c.hex.toLowerCase());
-                        return (
-                          <button
-                            key={idx}
-                            type="button"
-                            onClick={() => {
-                              if (isSelected) {
-                                setNewProduct({
-                                  ...newProduct,
-                                  colors: newProduct.colors.filter(pc => pc.hex.toLowerCase() !== c.hex.toLowerCase())
-                                });
-                              } else {
-                                setNewProduct({
-                                  ...newProduct,
-                                  colors: [...(newProduct.colors || []), { name: c.name, hex: c.hex }]
-                                });
-                              }
-                            }}
-                            className={`group relative h-7 px-2.5 rounded-full border text-xs font-semibold flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
-                              isSelected
-                                ? 'border-amber-500 bg-amber-50 text-amber-950 dark:bg-amber-950/30 dark:text-amber-300'
-                                : 'border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700'
-                            }`}
-                            title={c.name}
-                          >
-                            <span
-                              className="h-3 w-3 rounded-full border border-white/25 shadow-sm"
-                              style={{ backgroundColor: c.hex }}
-                            />
-                            <span>{c.name}</span>
-                            {isSelected && <span className="text-[10px]">✓</span>}
-                          </button>
-                        );
-                      })}
+                  {/* File Upload Zone */}
+                  <div>
+                    <FieldLabel>Upload Filled Sheet (.xlsx, .xls, .csv)</FieldLabel>
+                    <div className="mt-2 flex flex-col items-center justify-center border-2 border-dashed border-zinc-300 dark:border-zinc-700 rounded-2xl p-6 bg-white dark:bg-zinc-800/10 hover:border-amber-400 dark:hover:border-amber-400 transition-colors relative cursor-pointer group">
+                      <input
+                        type="file"
+                        accept=".xlsx,.xls,.csv"
+                        onChange={handleFileChange}
+                        className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                        key={bulkFile ? 'file-uploaded' : 'file-empty'}
+                      />
+                      <div className="text-center space-y-2 pointer-events-none">
+                        <span className="text-3xl">📊</span>
+                        <p className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 group-hover:text-amber-500 transition-colors">
+                          {bulkFile ? bulkFile.name : 'Drag & drop or click to browse'}
+                        </p>
+                        <p className="text-xs text-zinc-400">
+                          {bulkFile ? `${(bulkFile.size / 1024).toFixed(1)} KB` : 'Supports Excel or CSV format'}
+                        </p>
+                      </div>
                     </div>
                   </div>
 
-                  {(newProduct.colors || []).length > 0 && (
-                    <div className="flex flex-wrap gap-2 mt-3 p-2 border border-dashed border-amber-200/70 dark:border-zinc-700 rounded-xl">
-                      {newProduct.colors.map((c, i) => (
-                        <span key={i} className="color-badge" style={{ borderLeft: `4px solid ${c.hex}` }}>
-                          {c.name}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setNewProduct({
-                                ...newProduct,
-                                colors: newProduct.colors.filter((_, idx) => idx !== i)
-                              });
-                            }}
-                            className="color-badge-remove"
-                          >
-                            ×
-                          </button>
-                        </span>
-                      ))}
+                  {/* Parsed Preview Table */}
+                  {parsedProducts.length > 0 && (
+                    <div className="space-y-4 pt-2 animate-fade-in">
+                      
+                      {/* Duplicate Strategy Option */}
+                      <div className="p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/10 space-y-3">
+                        <FieldLabel htmlFor="dup-strategy">Duplicate Handling Strategy</FieldLabel>
+                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400 -mt-1">
+                          Select how to handle products whose name already exists in the inventory.
+                        </p>
+                        <select
+                          id="dup-strategy"
+                          value={duplicateStrategy}
+                          onChange={(e) => setDuplicateStrategy(e.target.value)}
+                          className={`${inputBase} cursor-pointer`}
+                        >
+                          <option value="skip">⏭️ Skip duplicates (Keep existing)</option>
+                          <option value="merge">➕ Merge / Add Stock & Update Price</option>
+                          <option value="overwrite">🔄 Overwrite existing product completely</option>
+                        </select>
+                      </div>
+
+                      <div className="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 pb-2">
+                        <h4 className="text-xs font-bold text-zinc-700 dark:text-zinc-300 uppercase tracking-wide">
+                          Parsed Products ({parsedProducts.length})
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={clearBulkUpload}
+                          className="text-xs font-semibold text-red-500 hover:text-red-600 transition cursor-pointer"
+                        >
+                          Clear File
+                        </button>
+                      </div>
+
+                      <div className="max-h-60 overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
+                        <table className="w-full text-xs text-left">
+                          <thead className="sticky top-0 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 font-bold border-b border-zinc-200 dark:border-zinc-800">
+                            <tr>
+                              <th className="px-3 py-2">Status</th>
+                              <th className="px-3 py-2">Name</th>
+                              <th className="px-3 py-2">Category</th>
+                              <th className="px-3 py-2 text-right">Price</th>
+                              <th className="px-3 py-2 text-right">Stock</th>
+                              <th className="px-3 py-2">Colors</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800 bg-white dark:bg-zinc-900/30">
+                            {parsedProducts.map((p, index) => {
+                              let statusBadge = null;
+                              let rowClass = "";
+                              
+                              if (p.errors.length > 0) {
+                                statusBadge = <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400" title={p.errors.join(', ')}>✕ Error</span>;
+                                rowClass = "bg-red-50/20 dark:bg-red-950/5";
+                              } else if (p.isDuplicate) {
+                                statusBadge = <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">⚠️ Dup</span>;
+                                rowClass = "bg-amber-50/10 dark:bg-amber-950/5";
+                              } else {
+                                statusBadge = <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400">✓ Ready</span>;
+                              }
+
+                              return (
+                                <tr key={index} className={`${rowClass} hover:bg-zinc-50 dark:hover:bg-zinc-800/40`}>
+                                  <td className="px-3 py-2.5 font-medium whitespace-nowrap">{statusBadge}</td>
+                                  <td className="px-3 py-2.5 font-semibold text-zinc-900 dark:text-white truncate max-w-[120px]" title={p.name}>
+                                    {p.name}
+                                  </td>
+                                  <td className="px-3 py-2.5 text-zinc-500 dark:text-zinc-400">{p.category}</td>
+                                  <td className="px-3 py-2.5 text-right font-medium">{p.price.toFixed(2)}</td>
+                                  <td className="px-3 py-2.5 text-right font-medium">{p.totalStock}</td>
+                                  <td className="px-3 py-2.5">
+                                    <div className="flex flex-wrap gap-1">
+                                      {p.colors.map((c, i) => (
+                                        <span
+                                          key={i}
+                                          className="inline-block h-3 w-3 rounded-full border border-white/20 shadow-sm"
+                                          style={{ backgroundColor: c.hex }}
+                                          title={`${c.name} (${c.hex})`}
+                                        />
+                                      ))}
+                                      {p.colors.length === 0 && <span className="text-zinc-400 text-[10px]">None</span>}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Validation Warnings Summary */}
+                      {(() => {
+                        const allWarnings = parsedProducts.flatMap(p => p.warnings);
+                        const allErrors = parsedProducts.flatMap(p => p.errors);
+                        if (allWarnings.length === 0 && allErrors.length === 0) return null;
+                        return (
+                          <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 space-y-1.5 max-h-32 overflow-y-auto">
+                            {allErrors.map((e, idx) => (
+                              <p key={`e-${idx}`} className="text-[10px] text-red-500 font-semibold">✕ {e}</p>
+                            ))}
+                            {allWarnings.map((w, idx) => (
+                              <p key={`w-${idx}`} className="text-[10px] text-amber-500 font-medium">⚠️ {w}</p>
+                            ))}
+                          </div>
+                        );
+                      })()}
+
+                      {/* Confirm upload button */}
+                      <button
+                        type="button"
+                        disabled={loading || parsedProducts.filter(p => p.isValid).length === 0}
+                        onClick={handleConfirmBulkUpload}
+                        className="flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-amber-400 dark:text-zinc-900 dark:hover:bg-amber-300 cursor-pointer"
+                      >
+                        {loading ? 'Importing…' : `Confirm Import (${parsedProducts.filter(p => p.isValid).length} Products)`}
+                      </button>
                     </div>
                   )}
                 </div>
-
-                <button
-                  type="submit"
-                  id="create-product-btn"
-                  disabled={loading}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-amber-400 dark:text-zinc-900 dark:hover:bg-amber-300"
-                >
-                  {loading ? 'Creating…' : 'Create Product'}
-                </button>
-              </form>
+              )}
             </SectionCard>
 
             {/* Daily Count Update Card */}
