@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import stitchHiveLogo from './assets/Stich Hive - logo with no bg.png';
 import {
   collection,
   addDoc,
@@ -143,11 +144,9 @@ export default function AdminPanel() {
   // Orders and invoices states
   const [orders, setOrders] = useState([]);
   const [loadingOrders, setLoadingOrders] = useState(true);
-  const [newOrder, setNewOrder] = useState({
-    productId: '',
-    colorHex: '',
-    colorName: '',
-    quantity: '1',
+
+  // Multi-item order builder
+  const EMPTY_CUSTOMER = {
     customerName: '',
     customerPhone: '',
     customerEmail: '',
@@ -155,8 +154,13 @@ export default function AdminPanel() {
     deliveryMethod: 'Courier',
     deliveryDate: '',
     deliveryFee: '0.00',
-    unitPrice: ''
-  });
+  };
+  const EMPTY_DRAFT = { productId: '', colorHex: '', colorName: '', quantity: '1', unitPrice: '' };
+
+  const [orderItems, setOrderItems]     = useState([]);           // confirmed line items
+  const [draftItem, setDraftItem]       = useState(EMPTY_DRAFT);  // item being composed
+  const [customerFields, setCustomerFields] = useState(EMPTY_CUSTOMER);
+
   const [activeOrder, setActiveOrder] = useState(null);
   const [statusFilter, setStatusFilter] = useState('all');
 
@@ -384,101 +388,114 @@ export default function AdminPanel() {
     document.body.removeChild(link);
   };
 
-  /* ── Order Product Selector Helper ── */
-  const handleOrderProductChange = (productId) => {
+  /* ── Draft item: product change helper ── */
+  const handleDraftProductChange = (productId) => {
     const product = products.find(p => p.id === productId);
     if (product) {
-      setNewOrder({
-        ...newOrder,
+      setDraftItem({
+        ...EMPTY_DRAFT,
         productId,
         unitPrice: product.price ? String(product.price) : '0.00',
-        colorHex: product.colors && product.colors.length > 0 ? product.colors[0].hex : '',
-        colorName: product.colors && product.colors.length > 0 ? product.colors[0].name : '',
+        colorHex:  product.colors?.length ? product.colors[0].hex  : '',
+        colorName: product.colors?.length ? product.colors[0].name : '',
       });
     } else {
-      setNewOrder({
-        ...newOrder,
-        productId: '',
-        unitPrice: '',
-        colorHex: '',
-        colorName: ''
-      });
+      setDraftItem(EMPTY_DRAFT);
     }
   };
 
-  /* ── Record New Order ── */
+  /* ── Add draft item to the order basket ── */
+  const handleAddDraftItem = () => {
+    if (!draftItem.productId) { showToast('Please select a product.', 'error'); return; }
+    const qty = parseInt(draftItem.quantity, 10) || 0;
+    if (qty <= 0) { showToast('Quantity must be at least 1.', 'error'); return; }
+    const product = products.find(p => p.id === draftItem.productId);
+    if (!product) return;
+    // Check for duplicate — merge quantities if same product+color
+    const existIdx = orderItems.findIndex(
+      i => i.productId === draftItem.productId && i.colorHex === draftItem.colorHex
+    );
+    if (existIdx >= 0) {
+      const updated = [...orderItems];
+      updated[existIdx] = { ...updated[existIdx], quantity: updated[existIdx].quantity + qty };
+      setOrderItems(updated);
+    } else {
+      setOrderItems([...orderItems, {
+        productId:   draftItem.productId,
+        productName: product.name,
+        colorHex:    draftItem.colorHex,
+        colorName:   draftItem.colorName,
+        quantity:    qty,
+        unitPrice:   parseFloat(draftItem.unitPrice) || 0,
+      }]);
+    }
+    setDraftItem(EMPTY_DRAFT);
+  };
+
+  /* ── Remove an item from the basket ── */
+  const handleRemoveOrderItem = (idx) => {
+    setOrderItems(orderItems.filter((_, i) => i !== idx));
+  };
+
+  /* ── Submit the full multi-item order ── */
   const handleCreateOrder = async (e) => {
     e.preventDefault();
-    if (!newOrder.productId || !newOrder.customerName.trim() || !newOrder.quantity) {
-      showToast('Please select a product and enter customer name/quantity.', 'error');
-      return;
+    if (orderItems.length === 0) {
+      showToast('Add at least one product to the order.', 'error'); return;
     }
-    
-    const qty = parseInt(newOrder.quantity, 10);
-    if (qty <= 0) {
-      showToast('Quantity must be a positive number.', 'error');
-      return;
+    if (!customerFields.customerName.trim()) {
+      showToast('Customer name is required.', 'error'); return;
     }
 
-    const selectedProduct = products.find(p => p.id === newOrder.productId);
-    if (!selectedProduct) return;
-
-    if ((selectedProduct.totalStock ?? 0) < qty) {
-      if (!window.confirm(`Warning: Stock for "${selectedProduct.name}" is only ${selectedProduct.totalStock}. Create order anyway?`)) {
-        return;
+    // Stock check across all items
+    for (const item of orderItems) {
+      const prod = products.find(p => p.id === item.productId);
+      if (prod && (prod.totalStock ?? 0) < item.quantity) {
+        if (!window.confirm(`Warning: "${prod.name}" only has ${prod.totalStock} in stock (order wants ${item.quantity}). Continue?`)) return;
       }
     }
 
     try {
       setLoading(true);
-      
       const orderNumber = 'SH-' + Math.floor(100000 + Math.random() * 900000);
-      
+
       const orderData = {
         orderNumber,
-        productId: newOrder.productId,
-        productName: selectedProduct.name,
-        colorHex: newOrder.colorHex,
-        colorName: newOrder.colorName,
-        quantity: qty,
-        unitPrice: parseFloat(newOrder.unitPrice) || 0,
-        customerName: newOrder.customerName.trim(),
-        customerPhone: newOrder.customerPhone.trim(),
-        customerEmail: newOrder.customerEmail.trim(),
-        shippingAddress: newOrder.shippingAddress.trim(),
-        deliveryMethod: newOrder.deliveryMethod,
-        deliveryDate: newOrder.deliveryDate,
-        deliveryFee: parseFloat(newOrder.deliveryFee) || 0,
-        status: 'pending',
+        items: orderItems,
+        // Keep legacy top-level fields for backwards compatibility
+        productId:   orderItems[0].productId,
+        productName: orderItems.map(i => i.productName).join(', '),
+        colorHex:    orderItems[0].colorHex,
+        colorName:   orderItems[0].colorName,
+        quantity:    orderItems.reduce((s, i) => s + i.quantity, 0),
+        unitPrice:   orderItems[0].unitPrice,
+        customerName:    customerFields.customerName.trim(),
+        customerPhone:   customerFields.customerPhone.trim(),
+        customerEmail:   customerFields.customerEmail.trim(),
+        shippingAddress: customerFields.shippingAddress.trim(),
+        deliveryMethod:  customerFields.deliveryMethod,
+        deliveryDate:    customerFields.deliveryDate,
+        deliveryFee:     parseFloat(customerFields.deliveryFee) || 0,
+        status:    'pending',
         createdAt: new Date()
       };
 
       const docRef = await addDoc(collection(db, 'orders'), orderData);
       setActiveOrder({ id: docRef.id, ...orderData });
 
-      await updateDoc(doc(db, 'products', newOrder.productId), {
-        totalStock: increment(-qty),
-        soldCount: increment(qty),
-        lastUpdated: new Date()
-      });
+      // Decrement stock for every item
+      await Promise.all(orderItems.map(item =>
+        updateDoc(doc(db, 'products', item.productId), {
+          totalStock: increment(-item.quantity),
+          soldCount:  increment(item.quantity),
+          lastUpdated: new Date()
+        })
+      ));
 
-      showToast(`Order ${orderNumber} created! Stock decremented by ${qty}.`);
-      
-      setNewOrder({
-        productId: '',
-        colorHex: '',
-        colorName: '',
-        quantity: '1',
-        customerName: '',
-        customerPhone: '',
-        customerEmail: '',
-        shippingAddress: '',
-        deliveryMethod: 'Courier',
-        deliveryDate: '',
-        deliveryFee: '0.00',
-        unitPrice: ''
-      });
-      
+      showToast(`Order ${orderNumber} created with ${orderItems.length} item(s)!`);
+      setOrderItems([]);
+      setDraftItem(EMPTY_DRAFT);
+      setCustomerFields(EMPTY_CUSTOMER);
       fetchProducts();
     } catch (err) {
       console.error('createOrder:', err);
@@ -513,125 +530,158 @@ export default function AdminPanel() {
     }
   };
 
+  /* ── Normalise an order into a guaranteed items[] array ── */
+  const getOrderItems = (order) => {
+    if (Array.isArray(order.items) && order.items.length > 0) return order.items;
+    // Legacy single-product order
+    return [{
+      productId:   order.productId   || '',
+      productName: order.productName || '—',
+      colorHex:    order.colorHex    || '',
+      colorName:   order.colorName   || '',
+      quantity:    Number(order.quantity  || 0),
+      unitPrice:   Number(order.unitPrice || 0),
+    }];
+  };
+
   /* ── Download PDF Invoice ── */
   const downloadInvoicePDF = (order) => {
-    const doc = new jsPDF();
-    
-    const primaryColor = [245, 158, 11]; // Stitch Hive Amber (#f59e0b)
-    const textColor = [24, 24, 27];      // Zinc-900
-    const lightTextColor = [113, 113, 122]; // Zinc-500
-    
-    // Top Accent Bar
-    doc.setFillColor(...primaryColor);
-    doc.rect(0, 0, 210, 8, 'F');
-    
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(24);
-    doc.setTextColor(...primaryColor);
-    doc.text('STITCH HIVE', 20, 30);
-    
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
-    doc.setTextColor(...lightTextColor);
-    doc.text('Real-time Inventory & Order Invoice', 20, 36);
-    
-    // Invoice details on the right
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(18);
-    doc.setTextColor(...textColor);
-    doc.text('INVOICE', 140, 30);
-    
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
-    doc.setTextColor(...textColor);
-    doc.text(`Invoice No: INV-${order.orderNumber || order.id.slice(0, 6).toUpperCase()}`, 140, 37);
-    doc.text(`Date: ${order.createdAt ? (order.createdAt.toDate ? order.createdAt.toDate().toLocaleDateString() : new Date(order.createdAt).toLocaleDateString()) : new Date().toLocaleDateString()}`, 140, 43);
-    doc.text(`Status: ${order.status?.toUpperCase() || 'PENDING'}`, 140, 49);
-    
-    // Line separator
-    doc.setDrawColor(228, 228, 231);
-    doc.setLineWidth(0.5);
-    doc.line(20, 56, 190, 56);
-    
-    // Billed To Info
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
-    doc.setTextColor(...primaryColor);
-    doc.text('BILLED TO:', 20, 68);
-    
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
-    doc.setTextColor(...textColor);
-    doc.text(order.customerName || 'N/A', 20, 74);
-    doc.text(`Phone: ${order.customerPhone || 'N/A'}`, 20, 80);
-    doc.text(`Email: ${order.customerEmail || 'N/A'}`, 20, 86);
-    
-    // Shipping details on the right
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(...primaryColor);
-    doc.text('SHIPPING DETAILS:', 110, 68);
-    
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(...textColor);
-    doc.text(`Method: ${order.deliveryMethod || 'Courier'}`, 110, 74);
-    doc.text(`Est. Date: ${order.deliveryDate || 'N/A'}`, 110, 80);
-    
-    doc.text('Address:', 110, 86);
-    const splitAddress = doc.splitTextToSize(order.shippingAddress || 'N/A', 80);
-    doc.text(splitAddress, 110, 92);
-    
-    // Table headers
-    doc.setFillColor(244, 244, 245);
-    doc.rect(20, 118, 170, 8, 'F');
-    
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.setTextColor(...textColor);
-    doc.text('Product Description', 24, 123);
-    doc.text('Color', 95, 123);
-    doc.text('Qty', 128, 123);
-    doc.text('Unit Price (LKR)', 142, 123);
-    doc.text('Total (LKR)', 172, 123);
-    
-    // Items List
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
-    doc.text(order.productName || 'N/A', 24, 134);
-    doc.text(order.colorName || 'N/A', 95, 134);
-    doc.text(String(order.quantity), 128, 134);
-    doc.text(`LKR ${Number(order.unitPrice || 0).toFixed(2)}`, 142, 134);
-    doc.text(`LKR ${(Number(order.unitPrice || 0) * Number(order.quantity)).toFixed(2)}`, 172, 134);
-    
-    doc.line(20, 140, 190, 140);
-    
-    const subtotal = Number(order.unitPrice || 0) * Number(order.quantity);
-    const deliveryFee = Number(order.deliveryFee || 0);
-    const total = subtotal + deliveryFee;
-    
-    // Summary
-    doc.setFont('helvetica', 'normal');
-    doc.text('Subtotal:', 130, 150);
-    doc.text(`LKR ${subtotal.toFixed(2)}`, 165, 150);
-    
-    doc.text('Delivery Fee:', 130, 156);
-    doc.text(`LKR ${deliveryFee.toFixed(2)}`, 165, 156);
-    
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(...primaryColor);
-    doc.text('Total Amount:', 130, 164);
-    doc.text(`LKR ${total.toFixed(2)}`, 165, 164);
-    
-    // Footer line
-    doc.setDrawColor(...primaryColor);
-    doc.setLineWidth(1);
-    doc.line(20, 185, 190, 185);
-    
-    doc.setFont('helvetica', 'italic');
-    doc.setFontSize(9);
-    doc.setTextColor(...lightTextColor);
-    doc.text('Thank you for business with Stitch Hive! For support, email orders@stitchhive.com', 105, 192, { align: 'center' });
-    
-    doc.save(`invoice_${order.orderNumber || order.id.slice(0, 6).toUpperCase()}.pdf`);
+    const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
+
+    const amber    = [245, 158, 11];
+    const dark     = [24,  24,  27];
+    const mid      = [82,  82,  91];
+    const muted    = [113, 113, 122];
+    const hairline = [228, 228, 231];
+    const bgRow    = [249, 250, 251];
+
+    const pageW = 210;
+    const mL    = 16;
+    const mR    = 194;
+
+    const invDate = order.createdAt
+      ? (order.createdAt.toDate
+          ? order.createdAt.toDate().toLocaleDateString('en-GB')
+          : new Date(order.createdAt).toLocaleDateString('en-GB'))
+      : new Date().toLocaleDateString('en-GB');
+    const invNo   = `INV-${order.orderNumber || order.id.slice(0, 6).toUpperCase()}`;
+    const items   = getOrderItems(order);
+    const itemsSubtotal = items.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
+    const deliveryFee   = Number(order.deliveryFee || 0);
+    const grandTotal    = itemsSubtotal + deliveryFee;
+
+    /* ── White background ── */
+    pdf.setFillColor(255, 255, 255);
+    pdf.rect(0, 0, pageW, 297, 'F');
+
+    /* ── Logo ── */
+    try { pdf.addImage(stitchHiveLogo, 'PNG', mL, 8, 36, 36); }
+    catch (_) {
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(18);
+      pdf.setTextColor(...amber); pdf.text('STITCH HIVE', mL, 28);
+    }
+
+    /* ── INVOICE header (right) ── */
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(26);
+    pdf.setTextColor(...dark); pdf.text('INVOICE', mR, 18, { align: 'right' });
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(...muted);
+    pdf.text(`No: ${invNo}`,                              mR, 26, { align: 'right' });
+    pdf.text(`Date: ${invDate}`,                          mR, 32, { align: 'right' });
+    pdf.text(`Status: ${(order.status||'pending').toUpperCase()}`, mR, 38, { align: 'right' });
+    pdf.text('Tel: +94 776 831 508',                     mR, 44, { align: 'right' });
+
+    /* ── Amber rule ── */
+    pdf.setFillColor(...amber); pdf.rect(mL, 48, mR - mL, 0.8, 'F');
+
+    /* ── Billed To ── */
+    let y = 56;
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(...amber);
+    pdf.text('BILLED TO', mL, y);
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(10); pdf.setTextColor(...dark);
+    pdf.text(order.customerName || '—', mL, y + 6);
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(...mid);
+    let billedY = y + 12;
+    if (order.customerPhone) { pdf.text(`Phone: ${order.customerPhone}`, mL, billedY); billedY += 5; }
+    if (order.customerEmail) { pdf.text(`Email: ${order.customerEmail}`, mL, billedY); }
+
+    /* ── Delivery Details ── */
+    const colR = 110;
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(...amber);
+    pdf.text('DELIVERY DETAILS', colR, y);
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(...mid);
+    pdf.text(`Method: ${order.deliveryMethod || 'Courier'}`, colR, y + 6);
+    pdf.text(`Est. Date: ${order.deliveryDate || '—'}`,      colR, y + 11);
+    const addrLines = pdf.splitTextToSize(order.shippingAddress || '—', 78);
+    pdf.text('Address:', colR, y + 16);
+    pdf.text(addrLines,  colR, y + 21);
+
+    /* ── Divider ── */
+    y = 83;
+    pdf.setDrawColor(...hairline); pdf.setLineWidth(0.35);
+    pdf.line(mL, y, mR, y);
+
+    /* ── Table header ── */
+    y = 86;
+    pdf.setFillColor(...bgRow); pdf.rect(mL, y, mR - mL, 7.5, 'F');
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(7.5); pdf.setTextColor(...dark);
+    pdf.text('DESCRIPTION', mL + 2, y + 5);
+    pdf.text('COLOR',       100,     y + 5);
+    pdf.text('QTY',         132,     y + 5, { align: 'right' });
+    pdf.text('UNIT (LKR)',  158,     y + 5, { align: 'right' });
+    pdf.text('TOTAL (LKR)', mR - 1,  y + 5, { align: 'right' });
+    pdf.setDrawColor(...hairline); pdf.setLineWidth(0.3);
+    pdf.line(mL, y + 7.5, mR, y + 7.5);
+
+    /* ── Item rows ── */
+    y = 97;
+    const ROW_H = 11; // height per item row
+    items.forEach((item, idx) => {
+      // Alternate row shading
+      if (idx % 2 === 1) {
+        pdf.setFillColor(253, 251, 244); // very light amber tint
+        pdf.rect(mL, y - 3, mR - mL, ROW_H, 'F');
+      }
+      const lineTotal = item.unitPrice * item.quantity;
+      pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(...dark);
+      pdf.text(item.productName || '—', mL + 2, y);
+      pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8); pdf.setTextColor(...muted);
+      pdf.text(`Ref: ${item.productId}`, mL + 2, y + 4.5);
+      pdf.setFontSize(9); pdf.setTextColor(...dark);
+      pdf.text(item.colorName || '—',                      100,    y);
+      pdf.text(String(item.quantity),                      132,    y, { align: 'right' });
+      pdf.text(item.unitPrice.toFixed(2),                  158,    y, { align: 'right' });
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(lineTotal.toFixed(2),                       mR - 1, y, { align: 'right' });
+      // Row bottom border
+      pdf.setDrawColor(...hairline); pdf.setLineWidth(0.25);
+      pdf.line(mL, y + ROW_H - 3, mR, y + ROW_H - 3);
+      y += ROW_H;
+    });
+
+    /* ── Totals ── */
+    y += 4;
+    const totW = 76;
+    const totX = mR - totW;
+    pdf.setFont('helvetica', 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(...muted);
+    pdf.text('Subtotal:', totX, y);
+    pdf.setTextColor(...dark); pdf.text(`LKR ${itemsSubtotal.toFixed(2)}`, mR, y, { align: 'right' });
+    pdf.setTextColor(...muted); pdf.text('Delivery Fee:', totX, y + 7);
+    pdf.setTextColor(...dark); pdf.text(`LKR ${deliveryFee.toFixed(2)}`, mR, y + 7, { align: 'right' });
+
+    pdf.setFillColor(...amber);
+    pdf.roundedRect(totX - 2, y + 12, mR - totX + 2, 9, 1.5, 1.5, 'F');
+    pdf.setFont('helvetica', 'bold'); pdf.setFontSize(9); pdf.setTextColor(255, 255, 255);
+    pdf.text('TOTAL DUE', totX + 2, y + 17.5);
+    pdf.text(`LKR ${grandTotal.toFixed(2)}`, mR - 2, y + 17.5, { align: 'right' });
+
+    /* ── Footer ── */
+    pdf.setFillColor(...amber); pdf.rect(0, 282, pageW, 1.2, 'F');
+    pdf.setFont('helvetica', 'italic'); pdf.setFontSize(7.5); pdf.setTextColor(...muted);
+    pdf.text('Thank you for your business with Stitch Hive!', 105, 273, { align: 'center' });
+    pdf.setFont('helvetica', 'normal');
+    pdf.text('For enquiries: +94 776 831 508', 105, 278, { align: 'center' });
+
+    pdf.save(`invoice_${invNo}.pdf`);
   };
 
   /* ─────────────────────────────────────────────────────────────── */
@@ -1089,43 +1139,48 @@ export default function AdminPanel() {
               <SectionCard
                 icon="📝"
                 title="Record Customer Order"
-                subtitle="Deducts stock automatically from product"
+                subtitle="Add multiple products, then submit — stock deducted automatically"
               >
-                <form onSubmit={handleCreateOrder} className="space-y-4">
-                  <div>
-                    <FieldLabel htmlFor="order-product">Select Product</FieldLabel>
-                    <select
-                      id="order-product"
-                      value={newOrder.productId}
-                      onChange={(e) => handleOrderProductChange(e.target.value)}
-                      disabled={loadingProducts}
-                      className={`${inputBase} cursor-pointer`}
-                      required
-                    >
-                      <option value="">Choose a product…</option>
+                <form onSubmit={handleCreateOrder} className="space-y-5">
+
+                  {/* ── Step 1: Item Picker ── */}
+                  <div className="rounded-2xl border border-amber-200/60 dark:border-zinc-700 bg-amber-50/40 dark:bg-zinc-800/30 p-4 space-y-3">
+                    <p className="text-[11px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider">Step 1 — Add Products</p>
+
+                    {/* Product select */}
+                    <div>
+                      <FieldLabel htmlFor="order-product">Product</FieldLabel>
+                      <select
+                        id="order-product"
+                        value={draftItem.productId}
+                        onChange={(e) => handleDraftProductChange(e.target.value)}
+                        disabled={loadingProducts}
+                        className={`${inputBase} cursor-pointer`}
+                      >
+                        <option value="">Choose a product…</option>
                       {products.map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.name} — {p.totalStock} units available
+                          {p.name} — {p.totalStock} units
                         </option>
                       ))}
                     </select>
                   </div>
 
-                  {/* If product has colors, show color options */}
-                  {newOrder.productId && (() => {
-                    const sel = products.find(p => p.id === newOrder.productId);
-                    if (!sel || !sel.colors || sel.colors.length === 0) return null;
+                  {/* Color swatches for draft item */}
+                  {draftItem.productId && (() => {
+                    const sel = products.find(p => p.id === draftItem.productId);
+                    if (!sel?.colors?.length) return null;
                     return (
                       <div>
-                        <FieldLabel>Select Color</FieldLabel>
+                        <FieldLabel>Color</FieldLabel>
                         <div className="flex flex-wrap gap-2 mt-1.5">
                           {sel.colors.map((c, i) => (
                             <button
                               key={i}
                               type="button"
-                              onClick={() => setNewOrder({ ...newOrder, colorHex: c.hex, colorName: c.name })}
+                              onClick={() => setDraftItem({ ...draftItem, colorHex: c.hex, colorName: c.name })}
                               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-medium transition cursor-pointer ${
-                                newOrder.colorHex === c.hex
+                                draftItem.colorHex === c.hex
                                   ? 'border-amber-500 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-300'
                                   : 'border-zinc-200 bg-white text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
                               }`}
@@ -1139,133 +1194,152 @@ export default function AdminPanel() {
                     );
                   })()}
 
-                  <div className="grid grid-cols-2 gap-4">
+                  {/* Qty + Price + Add button */}
+                  <div className="flex gap-2 items-end">
+                    <div className="flex-1">
+                      <FieldLabel htmlFor="draft-qty">Qty</FieldLabel>
+                      <input id="draft-qty" type="number" min="1"
+                        value={draftItem.quantity}
+                        onChange={(e) => setDraftItem({ ...draftItem, quantity: e.target.value })}
+                        className={inputBase} />
+                    </div>
+                    <div className="flex-1">
+                      <FieldLabel htmlFor="draft-price">Unit Price (LKR)</FieldLabel>
+                      <input id="draft-price" type="number" step="0.01" min="0"
+                        value={draftItem.unitPrice}
+                        onChange={(e) => setDraftItem({ ...draftItem, unitPrice: e.target.value })}
+                        className={inputBase} />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleAddDraftItem}
+                      className="shrink-0 h-10 px-4 rounded-xl bg-amber-400 hover:bg-amber-300 text-zinc-900 text-sm font-bold transition cursor-pointer"
+                    >
+                      + Add
+                    </button>
+                  </div>
+                  </div>{/* end Step 1 box */}
+
+                  {/* ── Step 2: Order Basket ── */}
+                  <div className="rounded-2xl border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                    <div className="flex items-center justify-between px-4 py-2.5 bg-zinc-50 dark:bg-zinc-800 border-b border-zinc-200 dark:border-zinc-700">
+                      <p className="text-[11px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+                        Step 2 — Order Basket
+                        {orderItems.length > 0 && <span className="ml-2 px-1.5 py-0.5 rounded-full bg-amber-400 text-zinc-900 text-[10px]">{orderItems.length}</span>}
+                      </p>
+                      {orderItems.length > 0 && (
+                        <span className="text-xs font-bold text-amber-600">
+                          LKR {orderItems.reduce((s, i) => s + i.unitPrice * i.quantity, 0).toFixed(2)}
+                        </span>
+                      )}
+                    </div>
+                    {orderItems.length === 0 ? (
+                      <p className="px-4 py-5 text-center text-xs text-zinc-400 italic">No items added yet. Use Step 1 above to add products.</p>
+                    ) : (
+                      <div className="divide-y divide-zinc-100 dark:divide-zinc-700/50">
+                        {orderItems.map((item, idx) => (
+                          <div key={idx} className="flex items-center gap-3 px-4 py-2.5">
+                            {item.colorHex && (
+                              <span className="shrink-0 w-3 h-3 rounded-full border border-zinc-200" style={{ backgroundColor: item.colorHex }} />
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-semibold text-zinc-900 dark:text-white truncate">{item.productName}</p>
+                              <p className="text-[10px] text-zinc-500">
+                                {item.colorName ? `${item.colorName} · ` : ''}Qty: {item.quantity} × LKR {item.unitPrice.toFixed(2)}
+                              </p>
+                            </div>
+                            <span className="shrink-0 text-sm font-bold text-zinc-800 dark:text-white">
+                              LKR {(item.unitPrice * item.quantity).toFixed(2)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveOrderItem(idx)}
+                              className="shrink-0 w-6 h-6 flex items-center justify-center rounded-full text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition cursor-pointer text-base leading-none"
+                              title="Remove item"
+                            >×</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ── Step 3: Customer & Delivery ── */}
+                  <div className="rounded-2xl border border-zinc-200 dark:border-zinc-700 p-4 space-y-3">
+                    <p className="text-[11px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Step 3 — Customer & Delivery</p>
                     <div>
-                      <FieldLabel htmlFor="order-qty">Quantity</FieldLabel>
-                      <input
-                        id="order-qty"
-                        type="number"
-                        min="1"
-                        value={newOrder.quantity}
-                        onChange={(e) => setNewOrder({ ...newOrder, quantity: e.target.value })}
-                        className={inputBase}
-                        required
-                      />
+                      <FieldLabel htmlFor="cust-name">Customer Name *</FieldLabel>
+                      <input id="cust-name" type="text" placeholder="Jane Doe"
+                        value={customerFields.customerName}
+                        onChange={(e) => setCustomerFields({ ...customerFields, customerName: e.target.value })}
+                        className={inputBase} required />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <FieldLabel htmlFor="cust-phone">Phone</FieldLabel>
+                        <input id="cust-phone" type="text" placeholder="+94 77 123 4567"
+                          value={customerFields.customerPhone}
+                          onChange={(e) => setCustomerFields({ ...customerFields, customerPhone: e.target.value })}
+                          className={inputBase} />
+                      </div>
+                      <div>
+                        <FieldLabel htmlFor="cust-email">Email</FieldLabel>
+                        <input id="cust-email" type="email" placeholder="jane@example.com"
+                          value={customerFields.customerEmail}
+                          onChange={(e) => setCustomerFields({ ...customerFields, customerEmail: e.target.value })}
+                          className={inputBase} />
+                      </div>
                     </div>
                     <div>
-                      <FieldLabel htmlFor="order-price">Unit Price (LKR)</FieldLabel>
-                      <input
-                        id="order-price"
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={newOrder.unitPrice}
-                        onChange={(e) => setNewOrder({ ...newOrder, unitPrice: e.target.value })}
-                        className={inputBase}
-                        required
-                      />
+                      <FieldLabel htmlFor="cust-address">Shipping Address</FieldLabel>
+                      <textarea id="cust-address" placeholder="Street, City, Zip"
+                        value={customerFields.shippingAddress}
+                        onChange={(e) => setCustomerFields({ ...customerFields, shippingAddress: e.target.value })}
+                        rows="2" className={`${inputBase} resize-none`} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <FieldLabel htmlFor="delivery-method">Delivery Method</FieldLabel>
+                        <select id="delivery-method"
+                          value={customerFields.deliveryMethod}
+                          onChange={(e) => setCustomerFields({ ...customerFields, deliveryMethod: e.target.value })}
+                          className={`${inputBase} cursor-pointer`}>
+                          <option value="Courier">Courier</option>
+                          <option value="Pickup">Store Pickup</option>
+                          <option value="Express">Express Shipping</option>
+                          <option value="Standard">Standard Post</option>
+                        </select>
+                      </div>
+                      <div>
+                        <FieldLabel htmlFor="delivery-date">Est. Delivery Date</FieldLabel>
+                        <input id="delivery-date" type="date"
+                          value={customerFields.deliveryDate}
+                          onChange={(e) => setCustomerFields({ ...customerFields, deliveryDate: e.target.value })}
+                          className={inputBase} />
+                      </div>
+                    </div>
+                    <div>
+                      <FieldLabel htmlFor="order-fee">Delivery Fee (LKR)</FieldLabel>
+                      <input id="order-fee" type="number" step="0.01" min="0"
+                        value={customerFields.deliveryFee}
+                        onChange={(e) => setCustomerFields({ ...customerFields, deliveryFee: e.target.value })}
+                        className={inputBase} />
                     </div>
                   </div>
 
-                  <div>
-                    <FieldLabel htmlFor="order-fee">Delivery Fee (LKR)</FieldLabel>
-                    <input
-                      id="order-fee"
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={newOrder.deliveryFee}
-                      onChange={(e) => setNewOrder({ ...newOrder, deliveryFee: e.target.value })}
-                      className={inputBase}
-                      required
-                    />
-                  </div>
-
-                  <div className="border-t border-zinc-100 dark:border-zinc-800 pt-3 mt-3">
-                    <p className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-2">Delivery Details</p>
-                    <div className="space-y-3">
-                      <div>
-                        <FieldLabel htmlFor="cust-name">Customer Name</FieldLabel>
-                        <input
-                          id="cust-name"
-                          type="text"
-                          placeholder="Jane Doe"
-                          value={newOrder.customerName}
-                          onChange={(e) => setNewOrder({ ...newOrder, customerName: e.target.value })}
-                          className={inputBase}
-                          required
-                        />
-                      </div>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <FieldLabel htmlFor="cust-phone">Phone Number</FieldLabel>
-                          <input
-                            id="cust-phone"
-                            type="text"
-                            placeholder="+94 77 123 4567"
-                            value={newOrder.customerPhone}
-                            onChange={(e) => setNewOrder({ ...newOrder, customerPhone: e.target.value })}
-                            className={inputBase}
-                          />
-                        </div>
-                        <div>
-                          <FieldLabel htmlFor="cust-email">Email Address</FieldLabel>
-                          <input
-                            id="cust-email"
-                            type="email"
-                            placeholder="jane@example.com"
-                            value={newOrder.customerEmail}
-                            onChange={(e) => setNewOrder({ ...newOrder, customerEmail: e.target.value })}
-                            className={inputBase}
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <FieldLabel htmlFor="cust-address">Shipping Address</FieldLabel>
-                        <textarea
-                          id="cust-address"
-                          placeholder="Street, City, Zip"
-                          value={newOrder.shippingAddress}
-                          onChange={(e) => setNewOrder({ ...newOrder, shippingAddress: e.target.value })}
-                          rows="2"
-                          className={`${inputBase} resize-none`}
-                        />
-                      </div>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <FieldLabel htmlFor="delivery-method">Delivery Method</FieldLabel>
-                          <select
-                            id="delivery-method"
-                            value={newOrder.deliveryMethod}
-                            onChange={(e) => setNewOrder({ ...newOrder, deliveryMethod: e.target.value })}
-                            className={`${inputBase} cursor-pointer`}
-                          >
-                            <option value="Courier">Courier</option>
-                            <option value="Pickup">Store Pickup</option>
-                            <option value="Express">Express Shipping</option>
-                            <option value="Standard">Standard Post</option>
-                          </select>
-                        </div>
-                        <div>
-                          <FieldLabel htmlFor="delivery-date">Est. Delivery Date</FieldLabel>
-                          <input
-                            id="delivery-date"
-                            type="date"
-                            value={newOrder.deliveryDate}
-                            onChange={(e) => setNewOrder({ ...newOrder, deliveryDate: e.target.value })}
-                            className={inputBase}
-                          />
-                        </div>
-                      </div>
+                  {/* Grand total preview */}
+                  {orderItems.length > 0 && (
+                    <div className="flex justify-between items-center rounded-xl px-4 py-3 bg-amber-400 dark:bg-amber-500">
+                      <span className="text-sm font-bold text-zinc-900">Grand Total</span>
+                      <span className="text-sm font-extrabold text-zinc-900">
+                        LKR {(orderItems.reduce((s, i) => s + i.unitPrice * i.quantity, 0) + (parseFloat(customerFields.deliveryFee) || 0)).toFixed(2)}
+                      </span>
                     </div>
-                  </div>
+                  )}
 
-                  <button
-                    type="submit"
-                    disabled={loading}
+                  <button type="submit" disabled={loading || orderItems.length === 0}
                     className="flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-amber-400 dark:text-zinc-900 dark:hover:bg-amber-300"
                   >
-                    {loading ? 'Creating Order…' : 'Record Order'}
+                    {loading ? 'Creating Order…' : `Place Order${orderItems.length > 0 ? ` (${orderItems.length} item${orderItems.length > 1 ? 's' : ''})` : ''}`}
                   </button>
                 </form>
               </SectionCard>
@@ -1327,7 +1401,8 @@ export default function AdminPanel() {
                         </thead>
                         <tbody className="divide-y divide-amber-100/40 dark:divide-zinc-700/40">
                           {filteredOrders.map((order) => {
-                            const orderTotal = (order.unitPrice || 0) * (order.quantity || 0) + (order.deliveryFee || 0);
+                            const rowItems = getOrderItems(order);
+                            const orderTotal = rowItems.reduce((s, i) => s + i.unitPrice * i.quantity, 0) + (order.deliveryFee || 0);
                             const isSelected = activeOrder && activeOrder.id === order.id;
                             return (
                               <tr 
@@ -1350,13 +1425,21 @@ export default function AdminPanel() {
                                   {order.customerPhone && <p className="text-[10px] text-zinc-400">{order.customerPhone}</p>}
                                 </td>
                                 <td className="px-4 py-3">
-                                  <p className="font-medium text-zinc-900 dark:text-white leading-tight">{order.productName}</p>
+                                  <p className="font-medium text-zinc-900 dark:text-white leading-tight">
+                                    {rowItems[0]?.productName || order.productName}
+                                    {rowItems.length > 1 && (
+                                      <span className="ml-1 text-xs text-amber-600 font-bold">+{rowItems.length - 1} more</span>
+                                    )}
+                                  </p>
                                   <div className="flex items-center gap-1.5 mt-0.5">
-                                    {order.colorHex && (
-                                      <span className="w-2.5 h-2.5 rounded-full border border-zinc-200" style={{ backgroundColor: order.colorHex }} title={order.colorName} />
+                                    {rowItems[0]?.colorHex && (
+                                      <span className="w-2.5 h-2.5 rounded-full border border-zinc-200" style={{ backgroundColor: rowItems[0].colorHex }} title={rowItems[0].colorName} />
                                     )}
                                     <span className="text-xs text-zinc-500 font-medium">
-                                      {order.colorName ? `${order.colorName} • ` : ''}Qty: {order.quantity}
+                                      {rowItems.length === 1
+                                        ? `${rowItems[0]?.colorName ? rowItems[0].colorName + ' • ' : ''}Qty: ${rowItems[0]?.quantity}`
+                                        : `${rowItems.length} items · Total qty: ${rowItems.reduce((s, i) => s + i.quantity, 0)}`
+                                      }
                                     </span>
                                   </div>
                                 </td>
@@ -1472,111 +1555,110 @@ export default function AdminPanel() {
                     </p>
                   </div>
                 ) : (() => {
-                  const subtotal = Number(activeOrder.unitPrice || 0) * Number(activeOrder.quantity);
-                  const deliveryFee = Number(activeOrder.deliveryFee || 0);
-                  const total = subtotal + deliveryFee;
+                  const invoiceItems  = getOrderItems(activeOrder);
+                  const itemsSubtotal = invoiceItems.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
+                  const deliveryFee   = Number(activeOrder.deliveryFee || 0);
+                  const grandTotal    = itemsSubtotal + deliveryFee;
 
                   return (
-                    <div className="relative overflow-hidden border border-zinc-200 dark:border-zinc-750 rounded-2xl bg-zinc-50 dark:bg-zinc-950/20 p-4">
-                      {/* Interactive paper preview */}
-                      <div className="invoice-paper print-area p-5 sm:p-6 text-left max-w-full text-zinc-800 shadow-sm border border-zinc-250 bg-white">
-                        
-                        {/* Amber Top Border inside invoice card */}
-                        <div className="h-1.5 w-full bg-amber-500 rounded-t-lg -mt-6 mb-4" style={{ width: 'calc(100% + 48px)', marginLeft: '-24px' }} />
+                    <div className="relative overflow-hidden border border-zinc-200 dark:border-zinc-700 rounded-2xl bg-white p-0">
+                      {/* Invoice Paper - mirrors PDF layout exactly */}
+                      <div className="invoice-paper print-area p-6 sm:p-8 text-left text-zinc-800 bg-white">
 
-                        {/* Invoice Header */}
-                        <div className="flex justify-between items-start mb-6">
-                          <div>
-                            <h1 className="text-lg font-black text-amber-500 tracking-tight leading-none">STITCH HIVE</h1>
-                            <p className="text-[8px] text-zinc-400 font-semibold uppercase tracking-wider mt-1.5">
-                              Real-time Inventory & Order Invoice
-                            </p>
+                        {/* ── Header: Logo left, INVOICE block right ── */}
+                        <div className="flex justify-between items-start pb-4 mb-4" style={{ borderBottom: '2px solid #f59e0b' }}>
+                          <div className="flex items-center gap-3">
+                            <img src={stitchHiveLogo} alt="Stitch Hive" className="h-14 w-14 object-contain" />
                           </div>
                           <div className="text-right">
-                            <h2 className="text-sm font-bold text-zinc-800">INVOICE</h2>
-                            <p className="text-[9px] text-zinc-500 font-semibold mt-1 leading-none">
-                              No: <span className="text-zinc-800 font-bold">INV-{activeOrder.orderNumber || activeOrder.id.slice(0, 6).toUpperCase()}</span>
+                            <h1 className="text-2xl font-black text-zinc-900 tracking-tight leading-none">INVOICE</h1>
+                            <p className="text-[10px] text-zinc-500 mt-1.5">
+                              No: <span className="font-bold text-zinc-800">INV-{activeOrder.orderNumber || activeOrder.id.slice(0, 6).toUpperCase()}</span>
                             </p>
-                            <p className="text-[9px] text-zinc-400">
-                              Date: {activeOrder.createdAt ? (activeOrder.createdAt.toDate ? activeOrder.createdAt.toDate().toLocaleDateString() : new Date(activeOrder.createdAt).toLocaleDateString()) : new Date().toLocaleDateString()}
+                            <p className="text-[10px] text-zinc-500">
+                              Date: {activeOrder.createdAt ? (activeOrder.createdAt.toDate ? activeOrder.createdAt.toDate().toLocaleDateString('en-GB') : new Date(activeOrder.createdAt).toLocaleDateString('en-GB')) : new Date().toLocaleDateString('en-GB')}
                             </p>
-                            <span className={`status-badge mt-1.5 py-0.5 px-2 text-[9px] ${activeOrder.status}`}>{activeOrder.status}</span>
+                            <p className="text-[10px] text-zinc-500">Status: <span className="font-semibold text-zinc-700 uppercase">{activeOrder.status || 'pending'}</span></p>
+                            <p className="text-[10px] text-zinc-500">Tel: +94 776 831 508</p>
                           </div>
                         </div>
 
-                        {/* Billing and Shipping Split */}
-                        <div className="grid grid-cols-2 gap-4 mb-6 border-t border-b border-zinc-100 py-4 text-[10px]">
+                        {/* ── Billed To + Delivery Details ── */}
+                        <div className="grid grid-cols-2 gap-4 mb-5 text-[10px]">
                           <div>
-                            <h3 className="text-[8px] font-bold text-amber-600 uppercase tracking-wider mb-1">Billed To</h3>
-                            <p className="font-semibold text-zinc-800">{activeOrder.customerName}</p>
+                            <p className="text-[8px] font-bold text-amber-500 uppercase tracking-wider mb-1">Billed To</p>
+                            <p className="font-bold text-zinc-900 text-sm">{activeOrder.customerName}</p>
                             {activeOrder.customerPhone && <p className="text-zinc-500 mt-0.5">Phone: {activeOrder.customerPhone}</p>}
                             {activeOrder.customerEmail && <p className="text-zinc-500">Email: {activeOrder.customerEmail}</p>}
                           </div>
                           <div>
-                            <h3 className="text-[8px] font-bold text-amber-600 uppercase tracking-wider mb-1">Delivery Details</h3>
-                            <p className="text-zinc-600"><span className="font-semibold text-zinc-800">Method:</span> {activeOrder.deliveryMethod}</p>
-                            {activeOrder.deliveryDate && <p className="text-zinc-600"><span className="font-semibold text-zinc-800">Est. Date:</span> {activeOrder.deliveryDate}</p>}
-                            <p className="text-zinc-600 mt-1 font-semibold text-zinc-800">Address:</p>
-                            <p className="text-zinc-500 whitespace-pre-wrap leading-tight mt-0.5">{activeOrder.shippingAddress || 'N/A'}</p>
+                            <p className="text-[8px] font-bold text-amber-500 uppercase tracking-wider mb-1">Delivery Details</p>
+                            <p className="text-zinc-600">Method: <span className="font-semibold text-zinc-800">{activeOrder.deliveryMethod}</span></p>
+                            {activeOrder.deliveryDate && <p className="text-zinc-600">Est. Date: <span className="font-semibold text-zinc-800">{activeOrder.deliveryDate}</span></p>}
+                            <p className="text-zinc-600 mt-0.5">Address:</p>
+                            <p className="text-zinc-500 whitespace-pre-wrap leading-snug">{activeOrder.shippingAddress || '—'}</p>
                           </div>
                         </div>
 
-                        {/* Item Table */}
-                        <table className="w-full text-left text-[9px] mb-6">
+                        {/* ── Divider ── */}
+                        <div className="border-t border-zinc-200 mb-4" />
+
+                        {/* ── Items Table ── */}
+                        <table className="w-full text-left mb-4">
                           <thead>
-                            <tr className="bg-zinc-50 text-zinc-500 font-bold uppercase border-b border-zinc-100">
+                            <tr className="bg-zinc-50 text-zinc-500 text-[8px] font-bold uppercase">
                               <th className="py-2 px-2">Description</th>
                               <th className="py-2 px-2">Color</th>
                               <th className="py-2 px-2 text-right">Qty</th>
-                              <th className="py-2 px-2 text-right">Price (LKR)</th>
-                              <th className="py-2 px-2 text-right font-bold">Total (LKR)</th>
+                              <th className="py-2 px-2 text-right">Unit (LKR)</th>
+                              <th className="py-2 px-2 text-right">Total (LKR)</th>
                             </tr>
                           </thead>
                           <tbody>
-                            <tr className="border-b border-zinc-100 text-zinc-800 font-medium">
-                              <td className="py-2.5 px-2">
-                                <p className="font-bold">{activeOrder.productName}</p>
-                                <p className="text-[7px] text-zinc-400">ID: {activeOrder.productId}</p>
-                              </td>
-                              <td className="py-2.5 px-2">
-                                {activeOrder.colorHex ? (
-                                  <span className="inline-flex items-center gap-1">
-                                    <span className="h-2 w-2 rounded-full border border-zinc-200" style={{ backgroundColor: activeOrder.colorHex }} />
-                                    {activeOrder.colorName}
-                                  </span>
-                                ) : (
-                                  <span className="text-zinc-400">N/A</span>
-                                )}
-                              </td>
-                              <td className="py-2.5 px-2 text-right font-semibold">{activeOrder.quantity}</td>
-                              <td className="py-2.5 px-2 text-right">LKR {Number(activeOrder.unitPrice || 0).toFixed(2)}</td>
-                              <td className="py-2.5 px-2 text-right font-bold">LKR {subtotal.toFixed(2)}</td>
-                            </tr>
+                            {invoiceItems.map((item, idx) => (
+                              <tr key={idx} className={`border-t border-zinc-100 text-[10px] ${idx % 2 === 1 ? 'bg-amber-50/40' : ''}`}>
+                                <td className="py-2.5 px-2">
+                                  <p className="font-bold text-zinc-900">{item.productName}</p>
+                                  <p className="text-[8px] text-zinc-400">Ref: {item.productId}</p>
+                                </td>
+                                <td className="py-2.5 px-2 text-zinc-700">
+                                  {item.colorHex ? (
+                                    <span className="inline-flex items-center gap-1">
+                                      <span className="h-2.5 w-2.5 rounded-full border border-zinc-200 shrink-0" style={{ backgroundColor: item.colorHex }} />
+                                      {item.colorName}
+                                    </span>
+                                  ) : '—'}
+                                </td>
+                                <td className="py-2.5 px-2 text-right font-semibold text-zinc-800">{item.quantity}</td>
+                                <td className="py-2.5 px-2 text-right text-zinc-700">{Number(item.unitPrice || 0).toFixed(2)}</td>
+                                <td className="py-2.5 px-2 text-right font-bold text-zinc-900">{(item.unitPrice * item.quantity).toFixed(2)}</td>
+                              </tr>
+                            ))}
                           </tbody>
                         </table>
 
-                        {/* Totals Summary */}
-                        <div className="flex justify-end mb-6">
-                          <div className="w-48 text-[9px]">
-                            <div className="flex justify-between py-1 border-b border-zinc-50">
-                              <span className="text-zinc-400">Subtotal:</span>
-                              <span className="font-semibold text-zinc-800">LKR {subtotal.toFixed(2)}</span>
+                        {/* ── Totals ── */}
+                        <div className="flex justify-end mb-5">
+                          <div className="w-52 text-[10px] space-y-1">
+                            <div className="flex justify-between">
+                              <span className="text-zinc-500">Subtotal:</span>
+                              <span className="font-semibold text-zinc-800">LKR {itemsSubtotal.toFixed(2)}</span>
                             </div>
-                            <div className="flex justify-between py-1 border-b border-zinc-50">
-                              <span className="text-zinc-400">Delivery:</span>
+                            <div className="flex justify-between">
+                              <span className="text-zinc-500">Delivery Fee:</span>
                               <span className="font-semibold text-zinc-800">LKR {deliveryFee.toFixed(2)}</span>
                             </div>
-                            <div className="flex justify-between py-1.5 border-b border-zinc-200">
-                              <span className="text-zinc-800 font-bold">Total Due:</span>
-                              <span className="text-[10px] font-extrabold text-amber-500">LKR {total.toFixed(2)}</span>
+                            <div className="flex justify-between items-center rounded-lg px-2 py-1.5 mt-1" style={{ backgroundColor: '#f59e0b' }}>
+                              <span className="font-bold text-white text-[9px] uppercase tracking-wide">Total Due</span>
+                              <span className="font-extrabold text-white">LKR {grandTotal.toFixed(2)}</span>
                             </div>
                           </div>
                         </div>
 
-                        {/* Invoice Footer */}
-                        <div className="border-t border-amber-300 pt-4 text-center text-[7px] text-zinc-400 font-medium">
-                          <p className="italic">Thank you for your business with Stitch Hive!</p>
-                          <p className="mt-0.5">For support, email orders@stitchhive.com</p>
+                        {/* ── Footer ── */}
+                        <div className="border-t border-zinc-200 pt-3 text-center">
+                          <p className="text-[8px] italic text-zinc-400">Thank you for your business with Stitch Hive!</p>
+                          <p className="text-[8px] text-zinc-400 mt-0.5">For enquiries: <span className="font-semibold text-zinc-600">+94 776 831 508</span></p>
                         </div>
 
                       </div>
