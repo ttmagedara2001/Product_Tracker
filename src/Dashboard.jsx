@@ -73,8 +73,20 @@ function HexSpinner() {
 
 /* ── HexCard Component ───────────────────────────────────────── */
 function HexCard({ product }) {
+  const hasColors = product.colors && product.colors.length > 0;
+  
+  // Dynamic border styling if product has colors
+  const borderStyle = hasColors
+    ? {
+        background: product.colors.length === 1
+          ? `linear-gradient(145deg, ${product.colors[0].hex} 0%, #3f3f46 100%)`
+          : `linear-gradient(145deg, ${product.colors.map(c => c.hex).join(', ')})`,
+        filter: `drop-shadow(0 12px 28px ${product.colors[0].hex}35)`
+      }
+    : {};
+
   return (
-    <div className="hex-card">
+    <div className="hex-card" style={borderStyle}>
       <div className="hex-card-inner">
         {/* Category */}
         <span className="text-[10px] font-semibold uppercase tracking-[0.25em] text-amber-400">
@@ -85,6 +97,27 @@ function HexCard({ product }) {
         <h3 className="mt-2 text-[17px] font-bold leading-tight text-white line-clamp-2 px-2">
           {product.name}
         </h3>
+
+        {/* Product price if available */}
+        {product.price !== undefined && product.price > 0 && (
+          <span className="mt-1 text-[11px] font-semibold text-amber-300/80">
+            LKR {product.price.toFixed(2)}
+          </span>
+        )}
+
+        {/* Color circles */}
+        {hasColors && (
+          <div className="mt-2 flex items-center justify-center gap-1.5 flex-wrap max-w-full px-2">
+            {product.colors.map((color, idx) => (
+              <span
+                key={idx}
+                className="h-3 w-3 rounded-full border border-white/25 shadow-sm transition hover:scale-125"
+                style={{ backgroundColor: color.hex }}
+                title={color.name}
+              />
+            ))}
+          </div>
+        )}
 
         {/* Subtle divider */}
         <div className="mx-auto my-3 h-px w-8 rounded-full bg-amber-500/30" />
@@ -141,6 +174,7 @@ export default function Dashboard() {
     }
   }, []);
 
+
   return (
     <div className="relative min-h-screen overflow-hidden">
 
@@ -148,7 +182,7 @@ export default function Dashboard() {
       <div className="hive-cluster pointer-events-none" aria-hidden="true" />
 
       {/* ── Content ── */}
-      <main className="relative z-10 mx-auto flex max-w-5xl flex-col items-center px-6 pb-14 pt-10 text-center">
+      <main className="relative z-10 mx-auto flex max-w-5xl flex-col items-center px-4 pb-10 pt-6 sm:px-6 sm:pb-14 sm:pt-10 text-center">
 
         {/* Loading */}
         {loading && <HexSpinner />}
@@ -170,6 +204,7 @@ export default function Dashboard() {
         {/* Hexagonal product grid */}
         {!loading && products.length > 0 && (
           <div className="w-full">
+
             {/*
               Hex offset grid: odd columns shift down by half a card height.
               We use a CSS approach via gap + negative margin offset for the
@@ -179,14 +214,10 @@ export default function Dashboard() {
               className="flex flex-wrap justify-center"
               style={{ gap: '24px 12px' }}
             >
-              {products.map((product, index) => (
+              {products.map((product) => (
                 <div
                   key={product.id}
-                  style={{
-                    /* Offset every other card downward by half the card height */
-                    marginTop: index % 2 === 1 ? '64px' : '0px',
-                    transition: 'margin-top 0.3s ease',
-                  }}
+                  className="hex-grid-item"
                 >
                   <HexCard product={product} />
                 </div>
